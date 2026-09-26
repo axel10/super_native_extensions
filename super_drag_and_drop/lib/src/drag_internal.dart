@@ -156,11 +156,13 @@ abstract class _DragDetector extends StatelessWidget {
     Offset position_,
     double devicePixelRatio,
   ) {
+    debugPrint('[DRAG] maybeStartDrag called at $position_, pointer=$pointer');
     final position = Offset(
         (position_.dx * devicePixelRatio).roundToDouble() / devicePixelRatio,
         (position_.dy * devicePixelRatio).roundToDouble() / devicePixelRatio);
     final dragContext = _dragContext;
     if (dragContext != null) {
+      debugPrint('[DRAG] creating new session from dragContext');
       final session = dragContext.newSession(pointer: pointer);
       if (pointer != null) {
         // Hide hover during dragging. The delay is here because there may
@@ -186,6 +188,7 @@ abstract class _DragDetector extends StatelessWidget {
       );
       return drag;
     } else {
+      debugPrint('[DRAG] ERROR: _dragContext is NULL in maybeStartDrag!');
       return null;
     }
   }
@@ -198,27 +201,36 @@ abstract class _DragDetector extends StatelessWidget {
     double devicePixelRatio,
     _Drag drag,
   ) async {
+    debugPrint('[DRAG] _maybeStartDragWithSession: requesting dragConfiguration...');
     final dragConfiguration = await this.dragConfiguration(position, session);
     // User ended the drag gesture before the data is available.
     if (drag._ended) {
+      debugPrint('[DRAG] drag ended before configuration ready, cancelling session');
       _dragContext!.cancelSession(session);
       return;
     }
     if (dragConfiguration != null) {
+      debugPrint('[DRAG] dragConfiguration received with ${dragConfiguration.items.length} items. Converting to raw...');
       final rawConfiguration =
           await dragConfiguration.intoRaw(devicePixelRatio);
       if (buildContext.mounted) {
         session.dragCompleted.addListener(() {
+          debugPrint('[DRAG] session completed, disposing raw images');
           rawConfiguration.disposeImages();
         });
+        debugPrint('[DRAG] invoking native context.startDrag...');
         await context.startDrag(
             buildContext: buildContext,
             session: session,
             configuration: rawConfiguration,
             position: position);
+        debugPrint('[DRAG] context.startDrag finished');
       } else {
+        debugPrint('[DRAG] buildContext unmounted before startDrag');
         rawConfiguration.disposeImages();
       }
+    } else {
+      debugPrint('[DRAG] dragConfiguration is null, no drag started');
     }
   }
 }
@@ -249,13 +261,17 @@ class _ImmediatePointerState extends MultiDragPointerState {
   @override
   void checkForResolutionAfterMove() {
     assert(pendingDelta != null);
-    if (pendingDelta!.distance > _computeHitSlop(kind, gestureSettings)) {
+    final slop = _computeHitSlop(kind, gestureSettings);
+    debugPrint('[DRAG] pointer move delta=${pendingDelta!.distance}, slop=$slop');
+    if (pendingDelta!.distance > slop) {
+      debugPrint('[DRAG] slop exceeded! resolving GestureDisposition.accepted');
       resolve(GestureDisposition.accepted);
     }
   }
 
   @override
   void accepted(GestureMultiDragStartCallback starter) {
+    debugPrint('[DRAG] _ImmediatePointerState accepted callback, triggering starter($initialPosition)');
     starter(initialPosition);
   }
 }
@@ -272,22 +288,33 @@ class _ImmediateMultiDragGestureRecognizer
 
   @override
   MultiDragPointerState createNewPointerState(PointerDownEvent event) {
+    debugPrint('[DRAG] recognizer createNewPointerState at ${event.position}');
     return _ImmediatePointerState(event.position, event.kind, gestureSettings);
   }
 
   @override
   void acceptGesture(int pointer) {
     lastPointer = pointer;
+    debugPrint('[DRAG] acceptGesture pointer=$pointer');
     super.acceptGesture(pointer);
+  }
+
+  @override
+  void rejectGesture(int pointer) {
+    debugPrint('[DRAG] rejectGesture pointer=$pointer');
+    super.rejectGesture(pointer);
   }
 
   @override
   bool isPointerAllowed(PointerDownEvent event) {
     if (event.kind == PointerDeviceKind.mouse &&
         event.buttons != kPrimaryMouseButton) {
+      debugPrint('[DRAG] isPointerAllowed=false: not primary mouse button (buttons=${event.buttons})');
       return false;
     }
-    if (!isLocationDraggable(event.position)) {
+    final isDraggable = isLocationDraggable(event.position);
+    debugPrint('[DRAG] isPointerAllowed check: isLocationDraggable=${isDraggable} at ${event.position}');
+    if (!isDraggable) {
       return false;
     }
     return super.isPointerAllowed(event);
@@ -310,18 +337,22 @@ class DesktopDragDetector extends _DragDetector {
   Widget build(BuildContext context) {
     final devicePixelRatio = MediaQuery.of(context).devicePixelRatio;
     return RawGestureDetector(
+      behavior: hitTestBehavior,
       gestures: {
         _ImmediateMultiDragGestureRecognizer:
             GestureRecognizerFactoryWithHandlers<
                     _ImmediateMultiDragGestureRecognizer>(
                 () => _ImmediateMultiDragGestureRecognizer(
                     isLocationDraggable: isLocationDraggable), (recognizer) {
-          recognizer.onStart = (offset) => maybeStartDrag(
+          recognizer.onStart = (offset) {
+            debugPrint('[DRAG] recognizer.onStart callback at offset=$offset, lastPointer=${recognizer.lastPointer}');
+            return maybeStartDrag(
                 context,
                 recognizer.lastPointer,
                 offset,
                 devicePixelRatio,
               );
+          };
         })
       },
       child: child,
